@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Battle School 3D</title>
+<meta name="description" content="A 3D game inspired by Ender's Game: zero-g battles in the Battle Room, Ender's command console, and flying a fighter in the war. Glasses-free 3D with DisplayXR, 2D in any browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='6' width='52' height='52' rx='6' fill='none' stroke='%235fd0ff' stroke-width='4'/%3E%3Cpath d='M32 14v26M22 32l10 12 10-12' stroke='%23ff8a2a' stroke-width='5' fill='none'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #05070c;
+    --ink: #dce8ff;
+    --muted: #8193b3;
+    --panel: rgba(8, 14, 26, 0.78);
+    --line: rgba(95, 208, 255, 0.22);
+    --cyan: #5fd0ff;
+    --orange: #ff8a2a;
+    --red: #ff5a6a;
+    --ok: #6fe0a4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; outline: none; touch-action: none; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  kbd { display: inline-block; min-width: 1.5em; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); border-bottom-width: 2px;
+    font: 600 12px/1.6 ui-monospace, Consolas, monospace; text-align: center; color: var(--cyan); background: rgba(95, 208, 255, 0.06); }
+  .btn { border: 1px solid var(--line); background: rgba(95, 208, 255, 0.07); border-radius: 8px; padding: 7px 14px; }
+  .btn:hover { background: rgba(95, 208, 255, 0.16); }
+  .btn.primary { background: var(--orange); border-color: var(--orange); color: #1a0c00; font-weight: 700; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  [hidden] { display: none !important; }
+
+  /* ── top bar ── */
+  #bar { position: fixed; top: 10px; right: 10px; z-index: 6; display: flex; gap: 8px; align-items: center; padding: 6px 10px; font-size: 13px; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100vw - 20px); }
+  #bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  #bar input[type=range] { width: 80px; accent-color: var(--cyan); }
+  #badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: rgba(255,255,255,0.08); color: var(--muted); letter-spacing: 0.06em; }
+  #badge[data-kind=ok] { background: rgba(111, 224, 164, 0.16); color: var(--ok); }
+  .chip { border: 1px solid var(--line); background: transparent; border-radius: 99px; padding: 3px 10px; font-size: 12px; }
+  .chip:hover { background: rgba(95, 208, 255, 0.12); }
+
+  /* ── menu ── */
+  #menu { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 70px 16px 24px;
+    background: radial-gradient(ellipse at center, rgba(5,7,12,0.25), rgba(5,7,12,0.85) 75%); overflow: auto; }
+  #menu h1 { margin: 0; font: 800 clamp(34px, 6vw, 64px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: 0.18em; text-align: center;
+    background: linear-gradient(180deg, #fff, #8fd8ff); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 40px rgba(95,208,255,0.25); }
+  #menu .tag { margin: -12px 0 0; color: var(--muted); letter-spacing: 0.3em; font-size: 12px; text-transform: uppercase; text-align: center; }
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 300px)); gap: 16px; width: 100%; justify-content: center; }
+  @media (max-width: 960px) { .cards { grid-template-columns: minmax(0, 420px); } }
+  .card { padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 14px; }
+  .card h2 { margin: 0; font-size: 19px; letter-spacing: 0.04em; }
+  .card h2 small { display: block; font-size: 11px; letter-spacing: 0.25em; color: var(--muted); text-transform: uppercase; font-weight: 600; margin-bottom: 4px; }
+  .card p { margin: 0; color: #b5c4de; font-size: 14px; flex: 1; }
+  .card .levels { display: flex; flex-wrap: wrap; gap: 6px; }
+  .card .levels button { font-size: 12.5px; padding: 5px 10px; }
+  .card.room h2 { color: var(--orange); }
+  .card.console h2 { color: var(--cyan); }
+  .card.war h2 { color: #ff7a8a; }
+  .fine { color: #6c7c99; font-size: 12px; text-align: center; max-width: 760px; margin: 0; }
+
+  /* ── shared HUD ── */
+  .hud { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+  .hud .panel { pointer-events: auto; }
+  #banner { position: fixed; left: 50%; top: 22%; transform: translateX(-50%); text-align: center; z-index: 3; pointer-events: none; transition: opacity 0.8s; width: min(92vw, 720px); }
+  #banner h2 { margin: 0; font-size: clamp(24px, 4vw, 40px); letter-spacing: 0.12em; text-transform: uppercase; text-shadow: 0 0 24px rgba(95,208,255,0.6); }
+  #banner p { margin: 6px 0 0; color: #b9cbe8; font-size: 16px; }
+  #toast { position: fixed; left: 50%; bottom: 76px; transform: translateX(-50%); z-index: 3; padding: 8px 16px; font-size: 14px; pointer-events: none; transition: opacity 0.3s; max-width: 90vw; text-align: center; }
+  #flash { position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.5s;
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(255, 60, 80, 0.55)); }
+  .cross { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; }
+  .cross::before, .cross::after { content: ""; position: absolute; background: rgba(220, 240, 255, 0.85); box-shadow: 0 0 4px rgba(95,208,255,0.9); }
+  .cross::before { left: 12px; top: 0; width: 2px; height: 26px; }
+  .cross::after { top: 12px; left: 0; height: 2px; width: 26px; }
+  .cross.hit::before, .cross.hit::after { background: var(--orange); }
+  .help { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); padding: 6px 12px; font-size: 12.5px; color: var(--muted); white-space: nowrap; max-width: calc(100vw - 24px); overflow: hidden; text-overflow: ellipsis; }
+  .stat { font-size: 11px; letter-spacing: 0.18em; color: var(--muted); text-transform: uppercase; }
+  .val { font: 700 18px/1.2 ui-monospace, Consolas, monospace; }
+
+  /* ── battle room ── */
+  #room-top { position: fixed; top: 10px; left: 10px; padding: 10px 14px; display: flex; gap: 18px; }
+  #suit { display: flex; gap: 4px; margin-top: 4px; }
+  #suit i { width: 18px; height: 8px; border-radius: 2px; background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+  #suit i.off { background: #c9e9ff; box-shadow: none; opacity: 0.4; }
+  #charge { position: fixed; left: 50%; top: calc(50% + 34px); width: 120px; height: 5px; margin-left: -60px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
+  #charge i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--cyan), var(--orange)); }
+  #room-state { position: fixed; left: 50%; top: calc(50% + 46px); transform: translateX(-50%); font-size: 11px; letter-spacing: 0.2em; color: var(--muted); }
+
+  /* ── fleet ── */
+  #squads { position: fixed; left: 10px; top: 10px; width: 228px; padding: 8px; display: grid; gap: 6px; max-height: calc(100vh - 70px); overflow: auto; }
+  .sq { display: grid; grid-template-columns: 22px 1fr auto; gap: 2px 8px; align-items: center; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; text-align: left; background: rgba(255,255,255,0.03); }
+  .sq:hover { background: rgba(95, 208, 255, 0.08); }
+  .sq.sel { border-color: var(--sqc); background: rgba(255,255,255,0.07); }
+  .sq.dead { opacity: 0.35; }
+  .sq kbd { grid-row: span 2; }
+  .sq b { color: var(--sqc); font-size: 14px; }
+  .sq small { grid-column: 2 / 4; color: var(--muted); font-size: 11.5px; }
+  .sq .md { font: 700 11px ui-monospace, Consolas, monospace; color: #e8fbff; }
+  #fleet-top { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); padding: 8px 16px; display: flex; gap: 20px; align-items: center; }
+  #view-btn { pointer-events: auto; }
+  #cockpit-hud .cross { width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 2px solid rgba(95, 208, 255, 0.6); border-radius: 50%; }
+  #cockpit-hud .cross::before, #cockpit-hud .cross::after { display: none; }
+  #cockpit-hud .cross.hit { border-color: var(--orange); }
+  #cockpit-stats { position: fixed; right: 10px; bottom: 60px; padding: 10px 14px; display: grid; grid-template-columns: auto auto; gap: 2px 14px; }
+
+  /* ── end / reveal / pause ── */
+  .modal { position: fixed; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(3, 5, 10, 0.6); }
+  .modal .panel { max-width: 560px; width: 100%; padding: 24px; border-radius: 14px; }
+  .modal h2 { margin: 0 0 8px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .modal p { color: #c3d2ea; }
+  .modal .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  #reveal .panel { max-width: 640px; border-color: rgba(255, 255, 255, 0.2); }
+  #reveal h2 { font-size: 28px; color: #fff; }
+  #reveal p { font-size: 16px; line-height: 1.6; }
+  #reveal .quote { border-left: 3px solid var(--cyan); padding-left: 14px; }
+</style>
+</head>
+<body>
+<canvas id="stage" tabindex="0" aria-label="Battle School 3D"></canvas>
+
+<div id="bar" class="panel">
+  <span id="badge">2D</span>
+  <label>Depth <input id="depth" type="range" min="0" max="2" step="0.05" value="1"></label>
+  <button id="stereo-btn" class="chip" hidden>2D</button>
+  <button id="mute-btn" class="chip">Sound on</button>
+  <button id="menu-btn" class="chip" hidden>Menu</button>
+</div>
+
+<section id="menu">
+  <h1>BATTLE SCHOOL</h1>
+  <p class="tag">A 3D game inspired by Ender's Game</p>
+  <div class="cards">
+    <article class="card panel room">
+      <h2><small>Battle School</small>The Battle Room</h2>
+      <p>Zero-g laser tag in a 40 m cube. Command Dragon Army in first person: push off the stars, freeze the enemy with your flash gun, and reach their gate.</p>
+      <div class="levels" data-mode="room"></div>
+    </article>
+    <article class="card panel console">
+      <h2><small>Command School</small>Ender's Console</h2>
+      <p>Sit at the simulator. The battle is a hologram above the table: command your squadrons in 3D and use the Little Doctor when the swarm packs together.</p>
+      <div class="levels" data-mode="console"></div>
+    </article>
+    <article class="card panel war">
+      <h2><small>The Third Invasion</small>In the War</h2>
+      <p>Fly a fighter in the same battles. Your squadron fights around you. Press <kbd>Tab</kbd> any time to go back to the console and command.</p>
+      <div class="levels" data-mode="war"></div>
+    </article>
+  </div>
+  <p class="fine">A fan-made tribute to Orson Scott Card's novel <i>Ender's Game</i> (1985). It isn't affiliated with or endorsed by the author or publisher. On a Leia display in the DisplayXR Browser everything is glasses-free 3D; any other browser shows it in 2D.</p>
+</section>
+
+<div id="room-hud" class="hud" hidden>
+  <div id="room-top" class="panel">
+    <div><div class="stat">Enemy frozen</div><div id="r-enemies" class="val">0/0</div></div>
+    <div><div class="stat">Dragon</div><div id="r-allies" class="val">0</div></div>
+    <div><div class="stat">Flash suit</div><div id="suit"></div></div>
+    <div><div class="stat">To their gate</div><div id="r-gate" class="val">0 m</div></div>
+  </div>
+  <div class="cross" id="r-cross"></div>
+  <div id="charge"><i></i></div>
+  <div id="room-state" class="mono"></div>
+  <div class="help panel">Click to aim with the mouse · hold <kbd>Space</kbd> or right mouse to push off · click or <kbd>F</kbd> fires · <kbd>Q</kbd>/<kbd>E</kbd> roll · their gate is down</div>
+</div>
+
+<div id="fleet-hud" class="hud" hidden>
+  <div id="squads" class="panel"></div>
+  <div id="fleet-top" class="panel">
+    <div><div class="stat">Time</div><div id="f-time" class="val">0</div></div>
+    <div><div class="stat">Formics</div><div id="f-formics" class="val" style="color:#ff7a6a">0</div></div>
+    <div><div class="stat">Fighters</div><div id="f-humans" class="val" style="color:var(--cyan)">0</div></div>
+    <div id="f-planet-box" hidden><div class="stat">Planet</div><div id="f-planet" class="val">intact</div></div>
+    <button id="view-btn" class="btn">Fly a fighter <kbd>Tab</kbd></button>
+  </div>
+  <div id="cockpit-hud" hidden>
+    <div class="cross" id="c-cross"></div>
+    <div id="cockpit-stats" class="panel mono">
+      <span class="stat">Speed</span><span id="c-speed">0</span>
+      <span class="stat">Hull</span><span id="c-hp">4</span>
+      <span class="stat">Nearest formic</span><span id="c-near">-</span>
+      <span class="stat">Little Doctor</span><span id="c-md">0</span>
+      <span class="stat" id="c-planet-l" hidden>Planet</span><span id="c-planet" hidden>-</span>
+    </div>
+  </div>
+  <div class="help panel" id="f-help"></div>
+</div>
+
+<div id="banner" style="opacity:0"><h2></h2><p></p></div>
+<div id="toast" class="panel" style="opacity:0"></div>
+<div id="flash"></div>
+
+<div id="end" class="modal" hidden><div class="panel"><h2></h2><p></p><div class="actions"></div></div></div>
+<div id="reveal" class="modal" hidden><div class="panel"><h2>It was never a game</h2><div id="reveal-text"></div><div class="actions"></div></div></div>
+<div id="pause" class="modal" hidden><div class="panel"><h2>Paused</h2><p>Click Resume to carry on. In the Battle Room and the fighter, clicking the view takes the mouse again (<kbd>Esc</kbd> lets it go).</p>
+  <div class="actions"><button class="btn primary" id="resume-btn">Resume</button><button class="btn" id="pause-menu-btn">Main menu</button></div></div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/",
+  "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.45.1/js/inline3d.js",
+  "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.45.1/js/inline3d-three.js"
+} }
+</script>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
