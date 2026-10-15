@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { createInline3D, inline3dDisplayModesSupported } from '@displayxr/inline3d';
 import { EyeCamera, cameraRigFromCamera } from '@displayxr/inline3d/three';
 import { clamp } from './util.js';
+import { Post } from './post.js';
 
 const MIN_CONVERGENCE = 0.6; // metres; comfort floor for the zero-disparity plane
 const POP = 1.08; // convergence / camera-to-player distance: > 1 puts the player slightly out of the glass
@@ -43,13 +44,11 @@ export class Stage {
     r.autoClear = false;
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 0.95;
-    r.shadowMap.enabled = true;
-    r.shadowMap.type = THREE.PCFSoftShadowMap;
-    // One shadow pass per frame, shared by both eyes.
-    r.shadowMap.autoUpdate = false;
+    r.toneMappingExposure = 1.1; // bright (the user asked for a lighter look) without blowing out under bloom
+    r.setClearColor(0x000000, 1); // pure black: see post.js
 
     this.scene = new THREE.Scene();
+    this.post = new Post(r, this.scene);
     // The app camera is IN the scene: the eye cameras hang off it (attach pattern), and three only
     // updates a parented camera through a scene traversal.
     this.cam = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 400);
@@ -157,16 +156,17 @@ export class Stage {
     this.handle.setViewRig(this.currentRig());
     this.scene.updateMatrixWorld();
     const r = this.renderer;
-    r.shadowMap.needsUpdate = true;
     r.setScissorTest(false);
     r.clear();
     r.setScissorTest(true);
     for (let i = 0; i < 2; i++) {
-      const vp = vps[i];
-      r.setViewport(vp.x, vp.y, vp.width, vp.height);
-      r.setScissor(vp.x, vp.y, vp.width, vp.height);
       this.eyes[i].setLocalFromView(views[i]);
-      r.render(this.scene, this.eyes[i].camera);
+      this.eyes[i].camera.updateMatrixWorld();
+      this.post.render(this.eyes[i].camera, vps[i]);
+    }
+    if (!this.loggedWoven) {
+      this.loggedWoven = true;
+      console.info(`[battleschool] firstWoven eyes=${vps[0].width}x${vps[0].height} quality=${this.post.level}`);
     }
     r.setScissorTest(false);
   }
@@ -179,10 +179,12 @@ export class Stage {
       requestAnimationFrame(loop);
       this.step();
       const r = this.renderer;
-      r.shadowMap.needsUpdate = true;
+      r.setScissorTest(true);
       r.setViewport(0, 0, this.canvas.width, this.canvas.height);
+      r.setScissor(0, 0, this.canvas.width, this.canvas.height);
       r.clear();
-      r.render(this.scene, this.cam);
+      this.post.render(this.cam, { x: 0, y: 0, width: this.canvas.width, height: this.canvas.height });
+      r.setScissorTest(false);
     };
     requestAnimationFrame(loop);
   }

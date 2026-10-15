@@ -28,5 +28,10 @@ Plain ES modules with no build step. three.js 0.161 and `@displayxr/inline3d` 1.
 - `js/battleroom.js`: zero-g physics, flash-gun hit tests, AI soldiers.
 - `js/fleet.js`: the fleet simulation (squadrons, formic swarms, Little Doctor chain reactions) drawn with instanced meshes. The same simulation draws as a hologram or as full-size ships in space.
 - `js/campaign.js`: the command room, the console orders and the cockpit flight.
+- `js/post.js`: per-eye HDR post-processing (MSAA, a NaN guard, bloom, tone mapping). `js/space.js` makes the procedural Earth, the formic home world, the nebula sky and the environment maps; `js/fx.js` has the spark particles.
+
+### Look
+
+The visuals follow the 2013 film. The Battle Room is a geodesic glass sphere in orbit with Earth below, so the enemy gate (facing Earth) really is down. Suits are dark armour with light strips in each army's colour, and frozen soldiers turn ice-white. Fighters have PBR hulls, glowing engines and trails. Formic ships are dark and insect-like with glowing eyes, and their swarms ripple like flocks. The Little Doctor sends out a shockwave, and the home world burns white. The Quality menu (Ultra, High or Low) sets MSAA, bloom, particles and trails. In the DisplayXR Browser on the Leia panel all three hold the display's 30 fps.
 
 This is a fan-made tribute. It isn't affiliated with or endorsed by the author or the publisher, and all of the game's text is original.

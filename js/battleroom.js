@@ -1,16 +1,20 @@
-// The Battle Room: a 40 m zero-gravity cube in Battle School. You are the commander of Dragon
-// Army, seen first person. Grab a star (the floating cover blocks) or a wall, aim, and hold Space
-// to push off: you fly in a straight line until you hit something, so every jump is a decision.
-// The flash gun freezes whatever it hits. Win by freezing the other army, or by reaching their
-// gate. Their gate is in the floor of the room, so treat it as down.
+// The Battle Room: a zero-gravity glass sphere in orbit, with Earth turning below. You are the
+// commander of Dragon Army, seen first person. Grab a star (the floating cover blocks) or the
+// wall, aim, and hold Space to push off: you fly in a straight line until you hit something, so
+// every jump is a decision. The flash gun freezes whatever it hits. Win by freezing the other army,
+// or by going through their gate once half of them are frozen. Their gate faces Earth: it's down.
 
 import * as THREE from 'three';
-import { clamp, damp, pick, rand, TAU } from './util.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { clamp, damp, rand, TAU } from './util.js';
+import { atmosphere, earthTextures, envFromTexture, skyDome, sun } from './space.js';
+import { Sparks } from './fx.js';
 
-const HALF = 20; // room half-size (m)
+const RS = 22; // room radius (m)
 const R = 0.55; // soldier collision radius
 const STAR = 1.4; // star half-size
-const GATE = 3; // gate half-size
+const GATE = 3.2; // gate radius
+const SUN_DIR = new THREE.Vector3(0.75, 0.45, -0.5).normalize();
 
 export const ROOM_BATTLES = [
   {
@@ -22,65 +26,69 @@ export const ROOM_BATTLES = [
   {
     name: 'Dragon vs Rattlesnake',
     intro: 'They know your tricks now. Nine soldiers and better aim.',
-    enemies: [{ army: 'Rattlesnake', color: '#d64a3a', n: 9 }],
+    enemies: [{ army: 'Rattlesnake', color: '#ff4a3a', n: 9 }],
     allies: 4, skill: 0.6, react: 1.1, stars: 20,
   },
   {
     name: 'Dragon vs Griffin & Tiger',
     intro: 'Two armies at once. Nobody said it would be fair.',
-    enemies: [{ army: 'Griffin', color: '#a46bff', n: 7 }, { army: 'Tiger', color: '#f2c230', n: 7 }],
+    enemies: [{ army: 'Griffin', color: '#b07bff', n: 7 }, { army: 'Tiger', color: '#ffd23a', n: 7 }],
     allies: 5, skill: 0.7, react: 0.95, stars: 22,
   },
 ];
 
 const DRAGON = '#ff8a2a';
+const hdr = (c, k) => new THREE.Color(c).multiplyScalar(k); // > 1 blooms
 
-// ── look ──────────────────────────────────────────────────────────────────────────────────────
+// ── soldiers: dark armour with light strips in the army's colour ─────────────────────────────
 
-function gridTexture() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#0a1220';
-  g.fillRect(0, 0, 256, 256);
-  g.strokeStyle = 'rgba(90,170,255,0.35)';
-  g.lineWidth = 2;
-  g.strokeRect(1, 1, 254, 254);
-  g.strokeStyle = 'rgba(90,170,255,0.12)';
-  g.lineWidth = 1;
-  for (let i = 32; i < 256; i += 32) {
-    g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 256); g.moveTo(0, i); g.lineTo(256, i); g.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(10, 10);
-  t.anisotropy = 4;
-  return t;
-}
+const SUIT = new THREE.MeshStandardMaterial({ color: '#4a5262', roughness: 0.32, metalness: 0.55 });
+const PLATE = new THREE.MeshStandardMaterial({ color: '#8a94a6', roughness: 0.25, metalness: 0.7 });
+const VISOR = new THREE.MeshStandardMaterial({ color: '#0a1424', roughness: 0.05, metalness: 1 });
+const FROZEN_SUIT = new THREE.MeshStandardMaterial({ color: '#d8ecff', roughness: 0.15, metalness: 0.2, emissive: '#7fc8ff', emissiveIntensity: 0.5 });
+const FROZEN_LIGHT = new THREE.MeshBasicMaterial({ color: hdr('#bfe8ff', 2.5) });
 
 function soldierMesh(color) {
   const g = new THREE.Group();
-  const suit = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.2, emissive: color, emissiveIntensity: 0.15 });
-  const dark = new THREE.MeshStandardMaterial({ color: '#1a1f2a', roughness: 0.6 });
-  const visor = new THREE.MeshStandardMaterial({ color: '#0b1730', roughness: 0.1, metalness: 0.8, emissive: '#2a6bff', emissiveIntensity: 0.4 });
-  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
-  add(new THREE.BoxGeometry(0.5, 0.62, 0.3), suit, 0, 0.1, 0);
-  add(new THREE.SphereGeometry(0.21, 16, 12), suit, 0, 0.6, 0);
-  add(new THREE.BoxGeometry(0.28, 0.12, 0.1), visor, 0, 0.62, 0.17);
-  const limb = new THREE.CapsuleGeometry(0.08, 0.42, 4, 8);
-  const armL = add(limb, suit, -0.33, 0.12, 0.05); armL.rotation.z = 0.35;
-  const armR = add(limb, suit, 0.3, 0.2, 0.25); armR.rotation.x = -1.3;
-  const legL = add(limb, suit, -0.13, -0.5, 0); legL.rotation.z = 0.12;
-  const legR = add(limb, suit, 0.13, -0.5, 0); legR.rotation.z = -0.12;
-  add(new THREE.BoxGeometry(0.08, 0.08, 0.32), dark, 0.3, 0.2, 0.48); // gun
-  g.userData = { suit, legs: [legL, legR] };
+  const light = new THREE.MeshBasicMaterial({ color: hdr(color, 3) });
+  const parts = { suit: [], lights: [] };
+  const add = (geo, mat, x, y, z, rx = 0, rz = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, 0, rz);
+    g.add(m);
+    (mat === light ? parts.lights : parts.suit).push(m);
+    return m;
+  };
+  // Torso, chest plate, helmet with a mirrored visor and a lit brow line.
+  add(new THREE.CapsuleGeometry(0.2, 0.36, 6, 14), SUIT, 0, 0.12, 0);
+  add(new RoundedBoxGeometry(0.42, 0.34, 0.14, 3, 0.05), PLATE, 0, 0.24, 0.12);
+  add(new THREE.SphereGeometry(0.2, 24, 16), SUIT, 0, 0.62, 0);
+  add(new THREE.SphereGeometry(0.17, 24, 12, -1.1, 2.2, 0.9, 1.0), VISOR, 0, 0.62, 0.04);
+  add(new THREE.TorusGeometry(0.19, 0.012, 6, 24, Math.PI), light, 0, 0.7, 0.02, 0.15);
+  for (const sx of [-1, 1]) add(new THREE.SphereGeometry(0.1, 14, 10), PLATE, sx * 0.25, 0.36, 0);
+  // Limbs: upper + lower capsules, with light strips.
+  const limb = new THREE.CapsuleGeometry(0.07, 0.26, 4, 10);
+  const strip = new THREE.BoxGeometry(0.025, 0.24, 0.025);
+  for (const sx of [-1, 1]) {
+    add(limb, SUIT, sx * 0.3, 0.12, 0.04, 0, sx * 0.25);
+    add(limb, SUIT, sx * 0.34, -0.14, 0.14, -0.6, sx * 0.1);
+    add(strip, light, sx * 0.36, 0.12, 0.07, 0, sx * 0.25);
+    add(limb, SUIT, sx * 0.11, -0.36, 0, 0, sx * 0.08);
+    add(limb, SUIT, sx * 0.13, -0.68, 0.04, 0.15, 0);
+    add(strip, light, sx * 0.11, -0.36, 0.075, 0, sx * 0.08);
+    add(strip, light, sx * 0.13, -0.68, 0.11, 0.15, 0);
+  }
+  // Chest emblem and belt.
+  add(new THREE.BoxGeometry(0.3, 0.025, 0.02), light, 0, 0.32, 0.2);
+  add(new THREE.BoxGeometry(0.38, 0.05, 0.3), PLATE, 0, -0.1, 0);
+  // Flash gun with a lit muzzle.
+  add(new RoundedBoxGeometry(0.07, 0.08, 0.34, 2, 0.02), PLATE, 0.34, -0.2, 0.36);
+  add(new THREE.SphereGeometry(0.025, 8, 6), light, 0.34, -0.2, 0.54);
+  g.userData = parts;
+  g.scale.setScalar(1.15);
   return g;
 }
-
-const FROZEN = new THREE.MeshStandardMaterial({ color: '#e9f6ff', roughness: 0.2, metalness: 0.1, emissive: '#9fd8ff', emissiveIntensity: 0.55 });
-
-// ── soldiers ──────────────────────────────────────────────────────────────────────────────────
 
 class Soldier {
   constructor(team, color, army, isPlayer = false) {
@@ -103,7 +111,9 @@ class Soldier {
     this.frozen = true;
     this.anchored = false;
     if (this.vel.lengthSq() < 0.5) this.vel.randomDirection().multiplyScalar(0.6);
-    this.mesh?.traverse((m) => { if (m.isMesh) m.material = FROZEN; });
+    if (!this.mesh) return;
+    this.mesh.userData.suit.forEach((m) => (m.material = FROZEN_SUIT));
+    this.mesh.userData.lights.forEach((m) => (m.material = FROZEN_LIGHT));
   }
 }
 
@@ -117,60 +127,92 @@ export class BattleRoom {
     app.stage.scene.add(this.group);
     this.quat = new THREE.Quaternion();
     this.beams = [];
-    this.buildRoom();
+    this.built = false;
   }
 
-  buildRoom() {
+  /** Built on first entry: the Earth textures take a moment to generate. */
+  build() {
+    if (this.built) return;
+    this.built = true;
     const g = this.group;
-    const grid = gridTexture();
-    // The grid glows on its own, so the walls read as walls from anywhere in the room.
-    const wall = new THREE.MeshStandardMaterial({ map: grid, emissiveMap: grid, emissive: '#ffffff', emissiveIntensity: 0.9, roughness: 0.85, side: THREE.BackSide });
-    g.add(new THREE.Mesh(new THREE.BoxGeometry(HALF * 2, HALF * 2, HALF * 2), wall));
-    g.add(new THREE.AmbientLight('#8fb4ff', 1.1));
-    const key = new THREE.DirectionalLight('#ffffff', 1.1);
-    key.position.set(8, 30, 12);
-    g.add(key);
-    const fill = new THREE.PointLight('#5fa8ff', 80, 60, 1.5);
-    fill.position.set(0, 0, 0);
-    g.add(fill);
+    const renderer = this.app.stage.renderer;
 
-    // Corner lights, like the room's glowing seams.
-    const seamMat = new THREE.MeshBasicMaterial({ color: '#6fb8ff' });
-    for (const a of [-1, 1]) for (const b of [-1, 1]) {
-      const s = 0.12, L = HALF * 2;
-      [[L, s, s, 0, a * HALF, b * HALF], [s, L, s, a * HALF, 0, b * HALF], [s, s, L, a * HALF, b * HALF, 0]].forEach(([w, h, d, x, y, z]) => {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), seamMat);
-        m.position.set(x, y, z);
-        g.add(m);
-      });
+    // Outside: sky, sun and Earth turning far below.
+    this.sky = skyDome(1200);
+    this.env = envFromTexture(renderer, 'nebula', this.sky.userData.texture);
+    g.add(this.sky);
+    const s = sun(90);
+    s.position.copy(SUN_DIR).multiplyScalar(1000);
+    g.add(s);
+    const tex = earthTextures(1024, 512);
+    this.earth = new THREE.Group();
+    const earthMat = new THREE.MeshStandardMaterial({ map: tex.map, roughness: 0.75, metalness: 0, emissive: '#0a1a33', emissiveIntensity: 0.4 });
+    this.earth.add(new THREE.Mesh(new THREE.SphereGeometry(420, 96, 48), earthMat));
+    this.clouds = new THREE.Mesh(new THREE.SphereGeometry(424, 96, 48), new THREE.MeshStandardMaterial({ map: tex.clouds, transparent: true, depthWrite: false, roughness: 1 }));
+    this.earth.add(this.clouds);
+    const atm = atmosphere('#7cc4ff', 2.4, 2.2);
+    atm.scale.setScalar(420);
+    this.earth.add(atm);
+    this.earth.position.set(0, -560, -80);
+    this.earth.rotation.set(1.25, 0, 0.3); // equator towards the room: oceans, continents and cloud bands, not the ice cap
+    g.add(this.earth);
+
+    // Light: the sun, blue light bouncing off Earth, and a bright sky fill.
+    const key = new THREE.DirectionalLight('#fff4e0', 2.0);
+    key.position.copy(SUN_DIR).multiplyScalar(50);
+    const earthshine = new THREE.DirectionalLight('#7fb8ff', 0.8);
+    earthshine.position.set(0, -50, 0);
+    g.add(key, earthshine, new THREE.HemisphereLight('#cfe2ff', '#3a6aa8', 0.7));
+
+    // The room: a geodesic glass sphere with lit struts and two metal rings.
+    const struts = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(RS, 3), 1), new THREE.LineBasicMaterial({ color: hdr('#7fd4ff', 1.3), transparent: true, opacity: 0.55 }));
+    g.add(struts);
+    const glass = new THREE.Mesh(new THREE.SphereGeometry(RS + 0.05, 64, 32), new THREE.MeshStandardMaterial({
+      color: '#9fd8ff', roughness: 0.05, metalness: 0.9, envMap: this.env, envMapIntensity: 0.4, transparent: true, opacity: 0.06, side: THREE.BackSide, depthWrite: false,
+    }));
+    g.add(glass);
+    const ringMat = new THREE.MeshStandardMaterial({ color: '#c8d2e0', roughness: 0.25, metalness: 0.9, envMap: this.env });
+    for (const rx of [Math.PI / 2, 0]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(RS + 0.15, 0.22, 12, 160), ringMat);
+      ring.rotation.x = rx;
+      g.add(ring);
     }
+    // Floodlights around the equator.
+    const lampMat = new THREE.MeshBasicMaterial({ color: hdr('#e8f4ff', 4) });
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * TAU;
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.25, 10, 8), lampMat);
+      lamp.position.set(Math.cos(a) * (RS - 0.1), 0, Math.sin(a) * (RS - 0.1));
+      g.add(lamp);
+    }
+    g.add(new THREE.PointLight('#dceeff', 60, 60, 1.4));
 
-    // Gates: ours in the ceiling, theirs in the floor.
+    // Gates: ours at the top pole, theirs at the bottom, facing Earth.
     this.gates = [];
-    for (const [y, color] of [[HALF - 0.05, DRAGON], [-HALF + 0.05, '#4fd8ff']]) {
+    for (const [y, color] of [[RS - 0.1, DRAGON], [-RS + 0.1, '#4fd8ff']]) {
       const gate = new THREE.Group();
-      const mat = new THREE.MeshBasicMaterial({ color });
-      for (const [w, d, x, z] of [[GATE * 2, 0.25, 0, GATE], [GATE * 2, 0.25, 0, -GATE], [0.25, GATE * 2, GATE, 0], [0.25, GATE * 2, -GATE, 0]]) {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.1, d), mat);
-        m.position.set(x, 0, z);
-        gate.add(m);
-      }
-      const glow = new THREE.Mesh(new THREE.PlaneGeometry(GATE * 2, GATE * 2), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
-      glow.rotation.x = Math.PI / 2;
-      gate.add(glow);
+      const ringM = new THREE.MeshBasicMaterial({ color: hdr(color, 3) });
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(GATE, 0.14, 12, 64), ringM);
+      ring.rotation.x = Math.PI / 2;
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(GATE, 48), new THREE.MeshBasicMaterial({ color: hdr(color, 1.5), transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+      disc.rotation.x = Math.PI / 2;
+      gate.add(ring, disc);
       gate.position.y = y;
+      gate.userData = { ringM, disc };
       g.add(gate);
       this.gates.push(gate);
     }
 
-    this.starMat = new THREE.MeshStandardMaterial({ color: '#c9d6ea', roughness: 0.35, metalness: 0.5, emissive: '#2b4f80', emissiveIntensity: 0.35 });
-    this.starEdge = new THREE.LineBasicMaterial({ color: '#8fd0ff' });
-    this.starGeo = new THREE.BoxGeometry(STAR * 2, STAR * 2, STAR * 2);
-    this.starEdgeGeo = new THREE.EdgesGeometry(this.starGeo);
+    // Stars: rounded metal blocks with glowing edges.
+    this.starMat = new THREE.MeshStandardMaterial({ color: '#8fa6c8', roughness: 0.38, metalness: 0.35, envMap: this.env, envMapIntensity: 0.5 });
+    this.starEdge = new THREE.LineBasicMaterial({ color: hdr('#7fd4ff', 2.4) });
+    this.starGeo = new RoundedBoxGeometry(STAR * 2, STAR * 2, STAR * 2, 4, 0.22);
+    this.starEdgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(STAR * 2.02, STAR * 2.02, STAR * 2.02));
     this.starGroup = new THREE.Group();
     g.add(this.starGroup);
     this.soldierGroup = new THREE.Group();
     g.add(this.soldierGroup);
+    this.sparks = new Sparks(g, 2500, 0.18);
   }
 
   // ── round set-up ──────────────────────────────────────────────────────────────────────────
@@ -181,14 +223,16 @@ export class BattleRoom {
     this.over = false;
     this.time = 0;
     this.charge = 0;
+    this.gateWarned = false;
     this.starGroup.clear();
     this.soldierGroup.clear();
     this.beams.forEach((b) => this.group.remove(b.mesh));
     this.beams = [];
+    this.sparks.clear();
 
-    // Stars: mirror-symmetric so neither side has the better field, kept off the gates.
+    // Stars: point-symmetric so neither side has the better field, kept clear of the gates.
     this.stars = [];
-    const half = Math.ceil(this.cfg.stars / 2);
+    const want = Math.ceil(this.cfg.stars / 2) * 2;
     const addStar = (p) => {
       const box = new THREE.Box3(p.clone().subScalar(STAR), p.clone().addScalar(STAR));
       const mesh = new THREE.Mesh(this.starGeo, this.starMat);
@@ -198,20 +242,21 @@ export class BattleRoom {
       this.stars.push({ p, box });
     };
     let tries = 0;
-    while (this.stars.length < half * 2 && tries++ < 500) {
-      const p = new THREE.Vector3(rand(-15, 15), rand(2.5, 15), rand(-15, 15)).round();
-      if (Math.hypot(p.x, p.z) < 5 && p.y > 11) continue;
-      const q = new THREE.Vector3(-p.x, -p.y, -p.z);
+    while (this.stars.length < want && tries++ < 800) {
+      const p = new THREE.Vector3().randomDirection().multiplyScalar(rand(4, 16)).round();
+      if (p.y < 1.5 || (Math.hypot(p.x, p.z) < 6 && p.y > 10)) continue;
+      const q = p.clone().negate();
       if (this.stars.some((s) => s.p.distanceTo(p) < STAR * 4 || s.p.distanceTo(q) < STAR * 4)) continue;
       addStar(p);
       addStar(q);
     }
 
-    // Soldiers. The player starts on the ceiling by our gate, facing "down" at the enemy gate.
+    // Soldiers. The player starts on the glass by our gate, facing down at Earth and their gate.
+    const onCap = (top, polar, az) => new THREE.Vector3(Math.sin(polar) * Math.cos(az), (top ? 1 : -1) * Math.cos(polar), Math.sin(polar) * Math.sin(az)).multiplyScalar(RS - R);
     this.soldiers = [];
     this.player = new Soldier(0, DRAGON, 'Dragon', true);
-    this.player.pos.set(0, HALF - R, 4);
-    this.player.normal.set(0, -1, 0);
+    this.player.pos.copy(onCap(true, 0.2, Math.PI / 2));
+    this.player.normal.copy(this.player.pos).normalize().negate();
     this.soldiers.push(this.player);
     this.quat.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), new THREE.Vector3(0, -1, -0.15), new THREE.Vector3(0, 0, -1)));
 
@@ -219,22 +264,23 @@ export class BattleRoom {
     for (let i = 0; i < this.cfg.allies; i++) {
       const s = new Soldier(0, DRAGON, 'Dragon');
       s.name = names[i];
-      s.pos.set(-6 + i * 3, HALF - R, rand(-4, 2));
-      s.normal.set(0, -1, 0);
+      s.pos.copy(onCap(true, rand(0.3, 0.55), (i / this.cfg.allies) * TAU));
+      s.normal.copy(s.pos).normalize().negate();
       this.add(s);
     }
     this.enemyTotal = 0;
-    for (const army of this.cfg.enemies) {
+    this.cfg.enemies.forEach((army, ai) => {
       for (let i = 0; i < army.n; i++) {
         const s = new Soldier(1, army.color, army.army);
-        const a = (i / army.n) * TAU + (army === this.cfg.enemies[1] ? 0.4 : 0);
-        s.pos.set(Math.cos(a) * rand(4, 9), -HALF + R, Math.sin(a) * rand(4, 9));
-        s.normal.set(0, 1, 0);
+        s.pos.copy(onCap(false, rand(0.25, 0.6), (i / army.n) * TAU + ai * 0.4));
+        s.normal.copy(s.pos).normalize().negate();
         this.add(s);
         this.enemyTotal++;
       }
-    }
-    this.gates[1].children.forEach((c) => c.material.color?.set(this.cfg.enemies[0].color));
+    });
+    const ec = this.cfg.enemies[0].color;
+    this.gates[1].userData.ringM.color.copy(hdr(ec, 3));
+    this.gates[1].userData.disc.material.color.copy(hdr(ec, 1.5));
     this.app.hud.banner(this.cfg.name, this.cfg.intro);
     this.app.hud.toast('The enemy\'s gate is down.', 3500);
   }
@@ -246,13 +292,18 @@ export class BattleRoom {
   }
 
   enter(index = 0) {
+    this.build();
     this.group.visible = true;
-    this.app.stage.scene.background = new THREE.Color('#05080f');
-    this.app.stage.scene.fog = null;
-    this.app.stage.focusDist = 5;
-    const cam = this.app.stage.cam;
+    const { stage } = this.app;
+    stage.scene.background = null;
+    stage.scene.fog = null;
+    stage.scene.environment = this.env;
+    stage.focusDist = 5;
+    stage.post.setBloom({ strength: 0.55, radius: 0.45, threshold: 0.92 });
+    this.sparks.scale = stage.post.q.particles;
+    const cam = stage.cam;
     cam.near = 0.05;
-    cam.far = 200;
+    cam.far = 2000;
     cam.updateProjectionMatrix();
     this.app.hud.mode('room');
     this.start(index);
@@ -260,6 +311,7 @@ export class BattleRoom {
 
   exit() {
     this.group.visible = false;
+    this.app.stage.scene.environment = null;
     this.app.input.unlock();
   }
 
@@ -270,14 +322,10 @@ export class BattleRoom {
     if (s.anchored) return;
     s.pos.addScaledVector(s.vel, dt);
     let hitN = null;
-    for (const axis of ['x', 'y', 'z']) {
-      const lim = HALF - R;
-      if (Math.abs(s.pos[axis]) > lim) {
-        const n = new THREE.Vector3();
-        n[axis] = -Math.sign(s.pos[axis]);
-        s.pos[axis] = Math.sign(s.pos[axis]) * lim;
-        hitN = n;
-      }
+    const r = s.pos.length();
+    if (r > RS - R) {
+      hitN = s.pos.clone().divideScalar(r).negate();
+      s.pos.setLength(RS - R);
     }
     for (const st of this.stars) {
       const c = st.box.clampPoint(s.pos, new THREE.Vector3());
@@ -317,12 +365,15 @@ export class BattleRoom {
     return !this.stars.some((st) => ray.intersectBox(st.box, hit) && hit.distanceTo(a) < len - 0.3);
   }
 
-  /** Fire a flash beam. Returns the soldier hit (if any). */
+  /** Fire a flash beam. Hit-tests from `from`, draws from `visFrom`. Returns the soldier hit. */
   fire(from, dir, shooter, visFrom = from) {
     const ray = new THREE.Ray(from, dir);
-    let best = 60, target = null, limb = false;
+    let best = RS * 2, target = null, limb = false;
     const hit = new THREE.Vector3();
     for (const st of this.stars) if (ray.intersectBox(st.box, hit)) best = Math.min(best, hit.distanceTo(from));
+    // The glass: where the ray leaves the sphere.
+    const b = from.dot(dir), c = from.lengthSq() - RS * RS;
+    best = Math.min(best, -b + Math.sqrt(Math.max(0, b * b - c)));
     for (const s of this.soldiers) {
       if (s === shooter || s.frozen) continue;
       const toS = s.pos.clone().sub(from);
@@ -331,9 +382,10 @@ export class BattleRoom {
       const miss = toS.addScaledVector(dir, -t).length();
       if (miss < 0.75) { best = t; target = s; limb = miss > 0.32; }
     }
-    // A wall stops it at most at the room's far side.
-    const end = from.clone().addScaledVector(dir, Math.min(best, 70));
-    this.beam(visFrom, end, shooter.team === 0 ? '#ffd4a0' : '#b8ffcf');
+    const end = from.clone().addScaledVector(dir, best);
+    const col = shooter.team === 0 ? '#ffb070' : shooter.color;
+    this.beam(visFrom, end, col);
+    this.sparks.emit(end, target ? 26 : 10, target ? '#bfe8ff' : col, target ? 5 : 3, 0.6);
     if (target) this.hitSoldier(target, limb, shooter);
     return target;
   }
@@ -347,6 +399,7 @@ export class BattleRoom {
     }
     if (s.hits >= s.maxHits) {
       s.freeze();
+      this.sparks.emit(s.pos, 60, '#cdeeff', 3, 1.2);
       this.app.sfx.frozen();
       if (shooter.isPlayer) this.app.hud.toast(`${s.army} soldier frozen`, 900);
       else if (s.team === 0 && s.name) this.app.hud.toast(`${s.name} is frozen`, 1400);
@@ -354,12 +407,17 @@ export class BattleRoom {
   }
 
   beam(a, b, color) {
+    // A white-hot core inside a coloured glow; both bloom.
     const len = a.distanceTo(b);
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, len, 6, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
-    mesh.position.copy(a).add(b).multiplyScalar(0.5);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    this.group.add(mesh);
-    this.beams.push({ mesh, life: 0.18 });
+    const mk = (r, col, op) => {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending }));
+      m.position.copy(a).add(b).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      this.group.add(m);
+      return m;
+    };
+    this.beams.push({ mesh: mk(0.022, hdr('#ffffff', 4), 1), life: 0.2, op: 1 });
+    this.beams.push({ mesh: mk(0.09, hdr(color, 2), 0.6), life: 0.2, op: 0.6 });
   }
 
   // ── AI ────────────────────────────────────────────────────────────────────────────────────
@@ -377,14 +435,13 @@ export class BattleRoom {
       const lead = o.pos.clone().addScaledVector(o.vel, o.pos.distanceTo(s.pos) / 80);
       const err = (1 - skill) * 0.16 * (1 + o.pos.distanceTo(s.pos) / 20) * (o.isPlayer ? 1.4 : 1);
       const dir = lead.sub(s.pos).normalize().add(new THREE.Vector3().randomDirection().multiplyScalar(rand(0, err))).normalize();
-      this.fire(s.pos.clone().addScaledVector(dir, 0.6), dir, s);
+      this.fire(s.pos.clone().addScaledVector(dir, 0.7), dir, s);
       s.mesh.lookAt(o.pos);
       if (o.isPlayer || s.pos.distanceTo(this.player.pos) < 20) this.app.sfx.flash();
       return;
     }
     // Hop toward the enemy gate, star to star, with a little nerve and a little caution.
-    const goalY = s.team === 0 ? -HALF : HALF;
-    const goal = new THREE.Vector3(0, goalY, 0);
+    const goal = new THREE.Vector3(0, (s.team === 0 ? -1 : 1) * RS * 0.9, 0);
     const near = this.stars.filter((st) => st.p.distanceTo(s.pos) < 22 && st.p.distanceTo(s.pos) > 3);
     let dest;
     if (near.length && Math.random() < 0.85) {
@@ -393,8 +450,12 @@ export class BattleRoom {
     } else {
       dest = goal.clone().add(new THREE.Vector3(rand(-8, 8), 0, rand(-8, 8)));
     }
-    const dir = dest.sub(s.pos).normalize();
-    this.launch(s, dir, rand(5, 8));
+    this.launch(s, dest.sub(s.pos).normalize(), rand(5, 8));
+  }
+
+  /** Their gate opens once half their army is frozen (a rush past a full army doesn't count). */
+  gateOpen() {
+    return this.soldiers.filter((s) => s.team === 1 && s.frozen).length >= this.enemyTotal / 2;
   }
 
   // ── frame ─────────────────────────────────────────────────────────────────────────────────
@@ -426,7 +487,7 @@ export class BattleRoom {
       if (!p.anchored) this.charge = 0;
       // Fire: left click or F, about four shots a second.
       this.cool = Math.max(0, (this.cool ?? 0) - dt);
-      if ((input.locked && input.buttons & 1 || input.key('KeyF')) && this.cool === 0) {
+      if (((input.locked && input.buttons & 1) || input.key('KeyF')) && this.cool === 0) {
         this.cool = 0.25;
         sfx.flash();
         // Hit-test from the eye (the crosshair); draw the beam from low and to the right, like a gun
@@ -440,33 +501,34 @@ export class BattleRoom {
     for (const s of this.soldiers) {
       if (!s.isPlayer) this.think(s, dt);
       this.move(s, dt);
-      if (s.mesh) {
-        s.mesh.position.copy(s.pos);
-        if (s.frozen) s.mesh.rotateOnAxis(new THREE.Vector3(1, 0.3, 0).normalize(), dt * 0.8);
-        else if (s.anchored) {
-          // Feet on the thing we hold.
-          const up = s.normal;
-          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-          s.mesh.quaternion.slerp(q, 1 - Math.exp(-6 * dt));
-          s.mesh.position.addScaledVector(up, 0.25);
-        } else {
-          // Flying feet-first is how you keep a frozen shield in front of you; we just tuck.
-          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), s.vel.clone().normalize());
-          s.mesh.quaternion.slerp(q, 1 - Math.exp(-3 * dt));
-        }
+      if (!s.mesh) continue;
+      s.mesh.position.copy(s.pos);
+      if (s.frozen) s.mesh.rotateOnAxis(new THREE.Vector3(1, 0.3, 0).normalize(), dt * 0.8);
+      else if (s.anchored) {
+        // Feet on the thing we hold.
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.normal);
+        s.mesh.quaternion.slerp(q, 1 - Math.exp(-6 * dt));
+        s.mesh.position.addScaledVector(s.normal, 0.25);
+      } else {
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), s.vel.clone().normalize());
+        s.mesh.quaternion.slerp(q, 1 - Math.exp(-3 * dt));
       }
     }
 
     for (const b of this.beams) {
       b.life -= dt;
-      b.mesh.material.opacity = Math.max(0, b.life / 0.18);
-      if (b.life <= 0) { this.group.remove(b.mesh); b.mesh.geometry.dispose(); }
+      b.mesh.material.opacity = Math.max(0, b.life / 0.2) * b.op;
+      if (b.life <= 0) { this.group.remove(b.mesh); b.mesh.geometry.dispose(); b.mesh.material.dispose(); }
     }
     this.beams = this.beams.filter((b) => b.life > 0);
+    this.sparks.update(dt);
+    this.earth.rotation.y += dt * 0.004;
+    this.clouds.rotation.y += dt * 0.002;
 
-    // Camera = the player's eyes.
+    // Camera = the player's eyes; the sky follows so it stays at infinity.
     stage.cam.position.copy(p.pos);
     stage.cam.quaternion.copy(this.quat);
+    this.sky.position.copy(p.pos);
     // Converge on what you're looking at, so the star in front of you sits at the glass.
     const look = new THREE.Ray(p.pos, fwd);
     let dist = 30;
@@ -474,21 +536,16 @@ export class BattleRoom {
     for (const st of this.stars) if (look.intersectBox(st.box, hit)) dist = Math.min(dist, hit.distanceTo(p.pos));
     stage.focusDist = damp(stage.focusDist, clamp(dist, 2.5, 9), 3, dt);
 
-    const glow = this.gates[1].children[4];
-    glow.material.opacity = this.gateOpen() ? 0.35 + Math.sin(this.time * 4) * 0.12 : 0.08;
+    const open = this.gateOpen();
+    this.gates[1].userData.disc.material.opacity = open ? 0.45 + Math.sin(this.time * 4) * 0.15 : 0.08;
     this.checkEnd();
     const frozen = this.soldiers.filter((s) => s.team === 1 && s.frozen).length;
     const allies = this.soldiers.filter((s) => s.team === 0 && !s.isPlayer && !s.frozen).length;
     hud.room({
       enemies: `${frozen}/${this.enemyTotal}`, allies, suit: p.maxHits - p.hits, charge: this.charge,
       state: p.frozen ? 'FROZEN' : p.anchored ? 'HOLDING' : `DRIFT ${p.vel.length().toFixed(1)} m/s`,
-      gate: Math.max(0, p.pos.y + HALF).toFixed(0) + (this.gateOpen() ? ' m, open' : ' m, locked'),
+      gate: p.pos.distanceTo(new THREE.Vector3(0, -RS, 0)).toFixed(0) + (open ? ' m, open' : ' m, locked'),
     });
-  }
-
-  /** Their gate opens once half their army is frozen (a rush past a full army doesn't count). */
-  gateOpen() {
-    return this.soldiers.filter((s) => s.team === 1 && s.frozen).length >= this.enemyTotal / 2;
   }
 
   checkEnd() {
@@ -496,10 +553,10 @@ export class BattleRoom {
     const p = this.player;
     const { hud, sfx } = this.app;
     const enemiesLeft = this.soldiers.some((s) => s.team === 1 && !s.frozen);
-    const atGate = !p.frozen && p.pos.y < -HALF + R + 0.2 && Math.abs(p.pos.x) < GATE && Math.abs(p.pos.z) < GATE;
+    const atGate = !p.frozen && p.pos.y < -(RS - R - 0.6) && Math.hypot(p.pos.x, p.pos.z) < GATE;
     let result = null;
     if (!enemiesLeft) result = { win: true, text: 'Every enemy soldier is frozen. Dragon Army wins.' };
-    else if (atGate) result = { win: true, text: 'You touched their gate while they were still fighting. It counts. Dragon Army wins.' };
+    else if (atGate && this.gateOpen()) result = { win: true, text: 'You went through their gate while they were still fighting. It counts. Dragon Army wins.' };
     else if (p.frozen) result = { win: false, text: 'Your suit locked up. A commander who is frozen can\'t give orders.' };
     if (atGate && !result && !this.gateWarned) {
       this.gateWarned = true;
@@ -516,7 +573,7 @@ export class BattleRoom {
       text: `${result.text} Time: ${this.time.toFixed(0)} s.`,
       actions: [
         result.win && next ? { label: 'Next battle', go: () => this.start(this.level + 1), primary: true } : null,
-        result.win && !next ? { label: 'Go to Command School', go: () => this.app.go('fleet', 0), primary: true } : null,
+        result.win && !next ? { label: 'Go to Command School', go: () => this.app.go('console', 0), primary: true } : null,
         { label: result.win ? 'Replay' : 'Try again', go: () => this.start(this.level), primary: !result.win },
         { label: 'Main menu', go: () => this.app.menu() },
       ].filter(Boolean),

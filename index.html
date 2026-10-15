@@ -38,6 +38,7 @@
   #bar { position: fixed; top: 10px; right: 10px; z-index: 6; display: flex; gap: 8px; align-items: center; padding: 6px 10px; font-size: 13px; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100vw - 20px); }
   #bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
   #bar input[type=range] { width: 80px; accent-color: var(--cyan); }
+  #bar select { font: inherit; font-size: 12px; background: #0b1322; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 1px 4px; }
   #badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: rgba(255,255,255,0.08); color: var(--muted); letter-spacing: 0.06em; }
   #badge[data-kind=ok] { background: rgba(111, 224, 164, 0.16); color: var(--ok); }
   .chip { border: 1px solid var(--line); background: transparent; border-radius: 99px; padding: 3px 10px; font-size: 12px; }
@@ -45,7 +46,7 @@
 
   /* ── menu ── */
   #menu { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 70px 16px 24px;
-    background: radial-gradient(ellipse at center, rgba(5,7,12,0.25), rgba(5,7,12,0.85) 75%); overflow: auto; }
+    background: radial-gradient(ellipse at center, rgba(5,7,12,0.05), rgba(5,7,12,0.6) 80%); overflow: auto; }
   #menu h1 { margin: 0; font: 800 clamp(34px, 6vw, 64px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: 0.18em; text-align: center;
     background: linear-gradient(180deg, #fff, #8fd8ff); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 40px rgba(95,208,255,0.25); }
   #menu .tag { margin: -12px 0 0; color: var(--muted); letter-spacing: 0.3em; font-size: 12px; text-transform: uppercase; text-align: center; }
@@ -124,6 +125,7 @@
 <div id="bar" class="panel">
   <span id="badge">2D</span>
   <label>Depth <input id="depth" type="range" min="0" max="2" step="0.05" value="1"></label>
+  <label>Quality <select id="quality"></select></label>
   <button id="stereo-btn" class="chip" hidden>2D</button>
   <button id="mute-btn" class="chip">Sound on</button>
   <button id="menu-btn" class="chip" hidden>Menu</button>
@@ -177,6 +179,7 @@
   <div id="cockpit-hud" hidden>
     <div class="cross" id="c-cross"></div>
     <div id="cockpit-stats" class="panel mono">
+      <span class="stat">Your kills</span><span id="c-kills" style="color:var(--orange)">0</span>
       <span class="stat">Speed</span><span id="c-speed">0</span>
       <span class="stat">Hull</span><span id="c-hp">4</span>
       <span class="stat">Nearest formic</span><span id="c-near">-</span>

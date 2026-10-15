@@ -12,52 +12,56 @@
 import * as THREE from 'three';
 import { Fleet, FLEET_LEVELS, MD_RANGE, SQUADS } from './fleet.js';
 import { clamp, damp, rand } from './util.js';
+import { atmosphere, envFromTexture, glowTexture, roomEnv, skyDome, sun } from './space.js';
 
 const HOLO_SCALE = 1 / 430; // battle units -> metres above the table
 const TABLE_Y = 1.25;
 
-function starfield(n, r) {
-  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-  const c = new THREE.Color();
-  for (let i = 0; i < n; i++) {
-    const v = new THREE.Vector3().randomDirection().multiplyScalar(r);
-    pos.set([v.x, v.y, v.z], i * 3);
-    c.setHSL(rand(0.55, 0.7), rand(0, 0.5), rand(0.6, 1));
-    col.set([c.r, c.g, c.b], i * 3);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  return new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, depthWrite: false }));
-}
+const hdr = (c, k) => new THREE.Color(c).multiplyScalar(k); // > 1 blooms
 
-function nebulaTexture() {
+function gasGiantTexture() {
   const c = document.createElement('canvas');
-  c.width = 1024; c.height = 512;
+  c.width = 512; c.height = 256;
   const g = c.getContext('2d');
-  g.fillStyle = '#02030a';
-  g.fillRect(0, 0, 1024, 512);
-  for (const [x, y, r, col] of [[300, 220, 260, 'rgba(90,40,140,0.35)'], [700, 300, 300, 'rgba(30,80,160,0.3)'], [520, 180, 180, 'rgba(160,60,90,0.22)'], [120, 360, 200, 'rgba(40,120,140,0.2)']]) {
-    const gr = g.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, col);
-    gr.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = gr;
-    g.fillRect(0, 0, 1024, 512);
+  for (let y = 0; y < 256; y++) {
+    const t = y / 256, b = Math.sin(t * 40 + Math.sin(t * 9) * 3) * 0.5 + 0.5;
+    g.fillStyle = `rgb(${190 + b * 50},${150 + b * 50},${110 + b * 40})`;
+    g.fillRect(0, y, 512, 1);
+  }
+  g.globalAlpha = 0.35;
+  for (let i = 0; i < 60; i++) {
+    g.fillStyle = Math.random() < 0.5 ? '#a8704a' : '#f2dcc0';
+    g.beginPath(); g.ellipse(Math.random() * 512, Math.random() * 256, rand(20, 80), rand(2, 6), 0, 0, Math.PI * 2); g.fill();
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
 
-function figure(color) {
-  // A teacher watching from the dark: just a silhouette with a lit face.
+function gradientTexture() {
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 128;
+  const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, 128);
+  gr.addColorStop(0, 'rgba(255,255,255,0)');
+  gr.addColorStop(1, 'rgba(255,255,255,1)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 4, 128);
+  return new THREE.CanvasTexture(c);
+}
+
+/** A person at a station: uniform, face, a lit headset in their colour. */
+function figure(color, light = '#5fd0ff') {
   const g = new THREE.Group();
-  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.8 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.95, 4, 10), m);
-  body.position.y = 0.85;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), new THREE.MeshStandardMaterial({ color: '#c79a7a', roughness: 0.7, emissive: '#3a2a20', emissiveIntensity: 0.6 }));
-  head.position.y = 1.62;
-  g.add(body, head);
+  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.9, 4, 12), m);
+  body.position.y = 0.82;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), new THREE.MeshStandardMaterial({ color: '#d6a888', roughness: 0.6 }));
+  head.position.y = 1.56;
+  const set = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.015, 6, 24, Math.PI), new THREE.MeshBasicMaterial({ color: hdr(light, 3) }));
+  set.position.y = 1.58;
+  set.rotation.y = Math.PI / 2;
+  g.add(body, head, set);
   return g;
 }
 
@@ -68,64 +72,118 @@ export class Campaign {
     this.fleet.onPlayerLost = () => this.playerLost();
     this.view = 'console';
     this.orbit = { yaw: 0, pitch: 0.55, dist: 2.3 };
+    const renderer = app.stage.renderer;
 
-    // Command room.
+    // Command room: a bright round chamber, the jeesh at their stations around the table.
     const room = (this.room = new THREE.Group());
     room.visible = false;
     app.stage.scene.add(room);
-    room.add(new THREE.HemisphereLight('#5a78a8', '#0a0c12', 0.6));
-    const spot = new THREE.SpotLight('#9fd0ff', 30, 12, 0.6, 0.6);
-    spot.position.set(0, 5, 0);
+    this.roomEnv = roomEnv(renderer);
+    room.add(new THREE.HemisphereLight('#d4e4ff', '#3a4456', 0.9));
+    const spot = new THREE.SpotLight('#cfe8ff', 40, 14, 0.7, 0.5, 1.2);
+    spot.position.set(0, 6, 0);
     spot.target.position.set(0, 0, 0);
     room.add(spot, spot.target);
-    const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 64), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 0.4, metalness: 0.5 }));
+    const tableLight = new THREE.PointLight('#5fd0ff', 12, 6, 1.5);
+    tableLight.position.y = TABLE_Y;
+    room.add(tableLight);
+    const metal = new THREE.MeshStandardMaterial({ color: '#4a5668', roughness: 0.3, metalness: 0.8, envMap: this.roomEnv });
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(10, 96), new THREE.MeshStandardMaterial({ color: '#3a4454', roughness: 0.22, metalness: 0.85, envMap: this.roomEnv }));
     floor.rotation.x = -Math.PI / 2;
     room.add(floor);
-    const wall = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 6, 48, 1, true), new THREE.MeshStandardMaterial({ color: '#0b0f17', roughness: 0.9, side: THREE.BackSide }));
-    wall.position.y = 3;
-    room.add(wall);
-    // Wall consoles.
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * Math.PI * 2;
-      const scr = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.5), new THREE.MeshBasicMaterial({ color: i % 3 ? '#1d5a8a' : '#2a8a6a' }));
-      scr.position.set(Math.sin(a) * 8.9, 1.6 + (i % 2) * 0.7, Math.cos(a) * 8.9);
-      scr.lookAt(0, scr.position.y, 0);
-      room.add(scr);
+    for (const r of [1.6, 4.2, 7.2]) {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.04, 128), new THREE.MeshBasicMaterial({ color: hdr('#5fd0ff', 0.9) }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.005;
+      room.add(ring);
     }
-    // The table: pedestal, emitter ring, and a faint disc where the hologram stands.
-    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 0.85, 48), new THREE.MeshStandardMaterial({ color: '#1a2130', roughness: 0.35, metalness: 0.7 }));
+    const wall = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 7, 24, 1, true), new THREE.MeshStandardMaterial({ color: '#3c485c', roughness: 0.55, metalness: 0.4, side: THREE.BackSide, flatShading: true, envMap: this.roomEnv }));
+    wall.position.y = 3.5;
+    room.add(wall);
+    const ceilingRing = new THREE.Mesh(new THREE.TorusGeometry(7, 0.06, 8, 160), new THREE.MeshBasicMaterial({ color: hdr('#e8f4ff', 3) }));
+    ceilingRing.rotation.x = Math.PI / 2;
+    ceilingRing.position.y = 6.2;
+    room.add(ceilingRing);
+    // Light columns and wall screens.
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      if (i % 2 === 0) {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 5.5, 0.06), new THREE.MeshBasicMaterial({ color: hdr('#9fd8ff', 2.2) }));
+        strip.position.set(Math.sin(a) * 9.85, 3.2, Math.cos(a) * 9.85);
+        room.add(strip);
+      } else {
+        const scr = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.9), new THREE.MeshBasicMaterial({ color: hdr(i % 3 ? '#2f8fd8' : '#3fd8a8', 1.1) }));
+        scr.position.set(Math.sin(a) * 9.8, 2.2, Math.cos(a) * 9.8);
+        scr.lookAt(0, 2.2, 0);
+        room.add(scr);
+      }
+    }
+    // The table: pedestal, emitter ring, a lit disc and a soft column of projector light.
+    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.15, 0.85, 64), metal);
     ped.position.y = 0.42;
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.03, 8, 96), new THREE.MeshBasicMaterial({ color: '#5fd0ff' }));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(1.12, 0.035, 10, 128), new THREE.MeshBasicMaterial({ color: hdr('#5fd0ff', 1.8) }));
     rim.rotation.x = Math.PI / 2;
     rim.position.y = 0.86;
-    const disc = new THREE.Mesh(new THREE.CircleGeometry(1.08, 64), new THREE.MeshBasicMaterial({ color: '#0d3550', transparent: true, opacity: 0.6 }));
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(1.09, 96), new THREE.MeshBasicMaterial({ color: hdr('#1f6a9a', 0.5) }));
     disc.rotation.x = -Math.PI / 2;
     disc.position.y = 0.865;
     room.add(ped, rim, disc);
-    const cone = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.05, 0.9, 64, 1, true), new THREE.MeshBasicMaterial({ color: '#3fa8ff', transparent: true, opacity: 0.05, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
-    cone.position.y = TABLE_Y;
+    const cone = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.08, 1.4, 96, 1, true), new THREE.MeshBasicMaterial({ color: hdr('#3fa8ff', 0.4), map: gradientTexture(), transparent: true, opacity: 0.25, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    cone.position.y = 0.87 + 0.7;
     room.add(cone);
-    // The teachers, who show up as the stakes rise.
-    this.watchers = [[-2.4, -3.4, '#2a3a2a'], [2.2, -3.6, '#2c3242'], [0.3, -4.2, '#3a2a2a'], [-3.8, -2.2, '#2a2f3a'], [3.6, -2.4, '#2a2f3a']].map(([x, z, c]) => {
-      const f = figure(c);
+    // Dust in the projector light.
+    const dust = new Float32Array(400 * 3);
+    for (let i = 0; i < 400; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 1.1;
+      dust.set([Math.cos(a) * r, 0.9 + Math.random() * 1.3, Math.sin(a) * r], i * 3);
+    }
+    const dg = new THREE.BufferGeometry();
+    dg.setAttribute('position', new THREE.BufferAttribute(dust, 3));
+    this.dust = new THREE.Points(dg, new THREE.PointsMaterial({ size: 0.012, color: hdr('#bfe8ff', 1.4), transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending, map: glowTexture() }));
+    room.add(this.dust);
+    // The jeesh: one squadron leader at each station around the far side of the table.
+    SQUADS.forEach((s, i) => {
+      const a = Math.PI + ((i - 2.5) / 6) * 2.2;
+      const x = Math.sin(a) * 6.2, z = Math.cos(a) * 6.2;
+      const desk = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.8, 0.5), metal);
+      desk.position.set(x * 0.92, 0.4, z * 0.92);
+      desk.lookAt(0, 0.4, 0);
+      const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.45), new THREE.MeshBasicMaterial({ color: hdr(s.color, 1.3) }));
+      scr.position.set(x * 0.9, 1.05, z * 0.9);
+      scr.lookAt(x * 2, 1.2, z * 2);
+      const f = figure('#2a3448', s.color);
+      f.position.set(x, 0, z);
+      f.lookAt(0, 0, 0);
+      room.add(desk, scr, f);
+    });
+    // The teachers, who come to watch as the stakes rise.
+    this.watchers = [[-2.2, -8.2], [2.0, -8.3], [0.2, -8.8], [-4.6, -7.4], [4.4, -7.5]].map(([x, z]) => {
+      const f = figure('#3a4a3a', '#ffd27a');
       f.position.set(x, 0, z);
       f.lookAt(0, 0, 0);
       room.add(f);
       return f;
     });
 
-    // Space (cockpit view).
+    // Space (cockpit view): nebula, the sun, a gas giant, image-based light from the sky.
     const space = (this.space = new THREE.Group());
     space.visible = false;
     app.stage.scene.add(space);
-    this.sky = new THREE.Group();
-    this.sky.add(new THREE.Mesh(new THREE.SphereGeometry(760, 32, 16), new THREE.MeshBasicMaterial({ map: nebulaTexture(), side: THREE.BackSide, depthWrite: false, fog: false })));
-    this.sky.add(starfield(3000, 700));
-    this.sky.renderOrder = -1;
+    this.sky = skyDome(760);
+    this.spaceEnv = envFromTexture(renderer, 'nebula', this.sky.userData.texture);
+    const SUN = new THREE.Vector3(-0.8, 0.45, 0.4).normalize();
+    const s = sun(70);
+    s.position.copy(SUN).multiplyScalar(650);
+    this.sky.add(s);
+    this.giant = new THREE.Mesh(new THREE.SphereGeometry(150, 64, 32), new THREE.MeshStandardMaterial({ map: gasGiantTexture(), roughness: 0.9 }));
+    this.giant.add(atmosphere('#ffd2a0', 2.5, 1.5));
+    this.giant.position.set(-380, -150, -520);
+    this.giant.rotation.z = 0.35;
+    this.sky.add(this.giant);
     space.add(this.sky);
-    const sun = new THREE.DirectionalLight('#fff2dd', 2.2);
-    sun.position.set(-1, 0.6, 0.4);
-    space.add(sun, new THREE.HemisphereLight('#8fa8d8', '#2a1a30', 1.1));
+    const sunLight = new THREE.DirectionalLight('#fff2dd', 3.6);
+    sunLight.position.copy(SUN).multiplyScalar(10);
+    space.add(sunLight, new THREE.HemisphereLight('#a8c0f0', '#4a3050', 1.4));
 
     this.holoRoot = new THREE.Group(); // parent of fleet.root in console view
     this.holoRoot.position.y = TABLE_Y;
@@ -146,13 +204,14 @@ export class Campaign {
 
   start(level, view = this.view) {
     this.levelIndex = level;
+    this.kills = 0;
     this.fleet.start(level);
     this.reported = false;
     this.selected = this.fleet.squads[0];
     this.fleet.selected = this.selected;
     this.player = null;
     this.watchers.forEach((w, i) => (w.visible = level >= 2 ? i < (FLEET_LEVELS[level].final ? 5 : 2) : false));
-    this.orbit = { yaw: 0, pitch: 0.62, dist: 2.9 };
+    this.orbit = { yaw: 0, pitch: 0.78, dist: 3.1 };
     this.setView(view, true);
     const L = FLEET_LEVELS[level];
     this.app.hud.banner(L.name, L.intro);
@@ -161,7 +220,7 @@ export class Campaign {
 
   exit() {
     this.room.visible = this.space.visible = false;
-    this.app.stage.scene.fog = null;
+    this.app.stage.scene.environment = null;
     this.app.input.unlock();
     if (this.player) this.player.isPlayer = false;
     this.player = null;
@@ -175,10 +234,14 @@ export class Campaign {
     this.space.visible = !holo;
     this.fleet.setHolo(holo);
     (holo ? this.holoRoot : this.space).add(this.fleet.root);
-    stage.scene.background = new THREE.Color(holo ? '#06080d' : '#000000');
-    stage.scene.fog = holo ? new THREE.Fog('#06080d', 8, 18) : null;
+    stage.scene.background = null; // black clear: see post.js
+    stage.scene.fog = null;
+    stage.scene.environment = holo ? this.roomEnv : this.spaceEnv;
+    stage.post.setBloom(holo ? { strength: 0.55, radius: 0.45, threshold: 0.9 } : { strength: 0.6, radius: 0.5, threshold: 0.9 });
+    this.fleet.trailsOn = stage.post.q.trails;
+    this.fleet.sparks.scale = stage.post.q.particles;
     stage.cam.near = holo ? 0.05 : 0.5;
-    stage.cam.far = holo ? 40 : 1600;
+    stage.cam.far = holo ? 60 : 1600;
     stage.cam.updateProjectionMatrix();
     if (holo) {
       if (this.player) this.player.isPlayer = false;
@@ -274,6 +337,7 @@ export class Campaign {
 
   updateConsole(dt) {
     const { input, stage, hud } = this.app;
+    this.dust.rotation.y += dt * 0.06;
     const o = this.orbit;
     if (input.buttons & 1 && input.dragging) {
       o.yaw -= input.dx * 0.006;
@@ -386,6 +450,10 @@ export class Campaign {
         this.fleet.laser(from, best.pos, p.squad.color);
         this.fleet.damage(best, 1);
         hud.hitmarker();
+        if (!best.alive) {
+          this.kills = (this.kills ?? 0) + 1;
+          hud.toast(`Formic destroyed (${this.kills})`, 900);
+        }
       } else this.fleet.laser(from, from.clone().addScaledVector(fwd, 70), p.squad.color);
       sfx.laser(1);
     }
@@ -405,7 +473,7 @@ export class Campaign {
     let near = Infinity;
     for (const f of this.fleet.ships) if (f.alive && f.team === 1) near = Math.min(near, f.pos.distanceTo(p.pos));
     const toPlanet = this.fleet.planet.visible ? p.pos.distanceTo(this.fleet.planet.position) - this.fleet.planet.scale.x : null;
-    hud.cockpit({ speed: p.vel.length(), hp: p.hp, near, md: p.squad.md, planet: toPlanet, mdRange: MD_RANGE });
+    hud.cockpit({ kills: this.kills ?? 0, speed: p.vel.length(), hp: p.hp, near, md: p.squad.md, planet: toPlanet, mdRange: MD_RANGE });
   }
 
   finish(res) {

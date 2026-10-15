@@ -13,6 +13,7 @@ import { Sfx } from './audio.js';
 import { BattleRoom, ROOM_BATTLES } from './battleroom.js';
 import { Campaign } from './campaign.js';
 import { FLEET_LEVELS } from './fleet.js';
+import { QUALITY } from './post.js';
 import { clamp } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -92,6 +93,7 @@ const hud = {
     if (s.planet) $('f-planet').textContent = s.planet;
   },
   cockpit(s) {
+    $('c-kills').textContent = s.kills;
     $('c-speed').textContent = s.speed.toFixed(0);
     $('c-hp').textContent = '▮'.repeat(Math.max(0, s.hp)) || '-';
     $('c-near').textContent = isFinite(s.near) ? s.near.toFixed(0) : '-';
@@ -197,6 +199,22 @@ $('mute-btn').onclick = () => {
 };
 if (store.get('muted')) $('mute-btn').click();
 
+// Graphics quality: ?quality=ultra|high|low, else the last choice, else high.
+const qsel = $('quality');
+for (const [k, v] of Object.entries(QUALITY)) qsel.add(new Option(v.label, k));
+function setQuality(level) {
+  if (!QUALITY[level]) level = 'high';
+  stage.post.setLevel(level);
+  stage.maxEyeW = QUALITY[level].maxEyeW;
+  stage.sizeToCanvas();
+  qsel.value = level;
+  campaign.fleet.trailsOn = QUALITY[level].trails;
+  campaign.fleet.sparks.scale = QUALITY[level].particles;
+  if (room.sparks) room.sparks.scale = QUALITY[level].particles;
+}
+setQuality(params.get('quality') ?? store.get('quality') ?? 'high');
+qsel.onchange = () => { setQuality(qsel.value); store.set('quality', qsel.value); };
+
 const depth = $('depth');
 depth.value = clamp(+(params.get('depth') ?? store.get('depth') ?? 1), 0, 2);
 stage.setDepth(+depth.value);
@@ -245,6 +263,8 @@ if (params.has('mono')) {
   stage.monoLoop();
 } else {
   stage.start().then(({ woven }) => {
+    // On the Leia panel Ultra holds the display's 30 fps (measured), so 3D defaults to it.
+    if (woven && !params.get('quality') && !store.get('quality')) setQuality('ultra');
     stage.onModeChange(woven && stage.stereo);
     $('stereo-btn').hidden = !stage.displayModesSupported;
   });
